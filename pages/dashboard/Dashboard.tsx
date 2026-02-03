@@ -1,0 +1,70 @@
+
+import React, { useState, useEffect } from 'react';
+import { Flame, ShieldAlert, Clock, TrendingUp } from 'lucide-react';
+import StatCard from '../../components/StatCard';
+import AnalyticsChart from '../../components/AnalyticsChart';
+import { subscribeToIncidents } from '../../services/supabase';
+import { Incident, IncidentStatus } from '../../types';
+
+const Dashboard: React.FC = () => {
+    const [incidents, setIncidents] = useState<Incident[]>([]);
+    
+    useEffect(() => {
+        const unsubscribe = subscribeToIncidents(setIncidents);
+        return () => unsubscribe();
+    }, []);
+
+    const totalIncidentsToday = incidents.filter(i => new Date(i.timestamp).toDateString() === new Date().toDateString()).length;
+    const activeFireAlerts = incidents.filter(i => i.status === IncidentStatus.ACTIVE).length;
+    
+    // Mock response time
+    const avgResponseTime = 15.3;
+
+    return (
+        <div className="space-y-8">
+            <h1 className="text-3xl font-bold text-white">Dashboard Overview</h1>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <StatCard 
+                    title="Total Incidents (Today)" 
+                    value={totalIncidentsToday.toString()} 
+                    icon={<Flame className="h-8 w-8 text-[#FB8C00]" />}
+                    color="orange"
+                />
+                <StatCard 
+                    title="Active Fire Alerts" 
+                    value={activeFireAlerts.toString()} 
+                    icon={<ShieldAlert className="h-8 w-8 text-[#E53935]" />}
+                    color="red"
+                />
+                <StatCard 
+                    title="Average Response Time" 
+                    value={`${avgResponseTime} min`} 
+                    icon={<Clock className="h-8 w-8 text-[#FDD835]" />}
+                    color="yellow"
+                />
+                <StatCard 
+                    title="Monthly Trend" 
+                    value="+5.2%" 
+                    icon={<TrendingUp className="h-8 w-8 text-[#43A047]" />}
+                    color="green"
+                />
+            </div>
+            
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2 bg-[#2A2A2A] p-6 rounded-lg border border-gray-700">
+                    <h2 className="text-xl font-semibold text-white mb-4">Incident Analytics (Last 7 Days)</h2>
+                    <AnalyticsChart incidents={incidents} />
+                </div>
+                <div className="bg-[#2A2A2A] p-6 rounded-lg border border-gray-700">
+                     <h2 className="text-xl font-semibold text-white mb-4">Fire-Prone Area Heatmap</h2>
+                     <div className="w-full h-80 bg-[#0F0F0F] rounded-md flex items-center justify-center text-gray-500">
+                        Heatmap Placeholder
+                     </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default Dashboard;
