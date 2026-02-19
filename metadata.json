@@ -1,0 +1,5 @@
+{
+  "name": "Fire Smart",
+  "description": "An IoT-enabled fire detection, monitoring, and emergency response platform integrated with the Bureau of Fire Protection (BFP), built with React, TypeScript, and Supabase.",
+  "requestFramePermissions": []
+}

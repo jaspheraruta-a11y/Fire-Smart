@@ -1,0 +1,299 @@
+
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { Incident, IncidentStatus, SensorData } from '../types';
+
+// IMPORTANT:
+// Never expose your service_role / secret key in frontend code.
+// Use the PUBLIC anon key from your Supabase project's API settings.
+//
+// Set these in your env file (for CRA-style apps):
+// REACT_APP_SUPABASE_URL=https://....supabase.co
+// REACT_APP_SUPABASE_ANON_KEY=your_public_anon_key_here
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+
+if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error(
+        'Missing Supabase environment variables. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your .env file.'
+    );
+}
+
+export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey);
+
+// Test database connection
+export const testConnection = async (): Promise<boolean> => {
+    try {
+        const { data, error } = await supabase
+            .from('fire_alerts')
+            .select('id')
+            .limit(1);
+        
+        if (error) {
+            console.error('Database connection test failed:', error);
+            console.error('Error details:', {
+                message: error.message,
+                details: error.details,
+                hint: error.hint,
+                code: error.code
+            });
+            return false;
+        }
+        
+        console.log('Database connection test successful');
+        return true;
+    } catch (err) {
+        console.error('Database connection test error:', err);
+        return false;
+    }
+};
+
+// Raw row from fire_alerts (no joins)
+type FireAlertRow = {
+    id: number;
+    device_id: number | null;
+    location_id: number | null;
+    alert_level: string;
+    status: string;
+    triggered_at: string;
+};
+
+// Fetched separately when joins are not used
+type LocationRow = {
+    id: number;
+    location_name: string;
+    address: string;
+    latitude: number | null;
+    longitude: number | null;
+};
+
+type DeviceRow = {
+    id: number;
+    device_uid: string;
+};
+
+// Type for sensor readings (we'll fetch separately)
+type SensorReadingRow = {
+    device_id: number;
+    temperature: number | null;
+    smoke_level: number | null;
+    gas_level: number | null;
+    created_at: string;
+};
+
+const mapRowToIncident = (
+    row: FireAlertRow,
+    options?: {
+        locationMap?: Map<number, LocationRow>;
+        sensorDataMap?: Map<number, SensorData>;
+    }
+): Incident => {
+    const location = options?.locationMap?.get(row.location_id ?? 0);
+    const deviceId = row.device_id != null ? String(row.device_id) : '';
+
+    const sensorData: SensorData =
+        options?.sensorDataMap?.get(row.device_id ?? 0) ?? {
+            temperature: 0,
+            smoke: 0,
+            gas: 0,
+        };
+
+    // Normalize status: DB uses 'active' | 'responding' | 'resolved'
+    const rawStatus = (row.status ?? 'active').toString().toLowerCase();
+    const status: IncidentStatus =
+        rawStatus === 'resolved'
+            ? IncidentStatus.RESOLVED
+            : rawStatus === 'responding'
+              ? IncidentStatus.RESPONDING
+              : IncidentStatus.ACTIVE;
+
+    return {
+        id: String(row.id),
+        deviceId,
+        timestamp: row.triggered_at || new Date().toISOString(),
+        location: {
+            lat: Number(location?.latitude ?? 0),
+            lng: Number(location?.longitude ?? 0),
+        },
+        address: location?.address ?? 'Unknown location',
+        locationName: location?.location_name ?? 'Unknown location',
+        status,
+        sensorData,
+        assignedUnit: undefined,
+        resolvedAt: status === IncidentStatus.RESOLVED ? row.triggered_at : undefined,
+    };
+};
+
+// Fetch locations by IDs (separate query so RLS on fire_alerts alone is enough to see alerts)
+const fetchLocationsByIds = async (locationIds: number[]): Promise<Map<number, LocationRow>> => {
+    const map = new Map<number, LocationRow>();
+    if (locationIds.length === 0) return map;
+    const uniqueIds = [...new Set(locationIds)].filter(Boolean);
+    const { data, error } = await supabase
+        .from('locations')
+        .select('id, location_name, address, latitude, longitude')
+        .in('id', uniqueIds);
+    if (error) {
+        console.warn('Could not fetch locations (RLS?):', error.message);
+        return map;
+    }
+    (data ?? []).forEach((row: LocationRow) => map.set(row.id, row));
+    return map;
+};
+
+// Helper function to fetch latest sensor readings for devices
+const fetchLatestSensorReadings = async (deviceIds: number[]): Promise<Map<number, SensorData>> => {
+    const sensorDataMap = new Map<number, SensorData>();
+    
+    if (deviceIds.length === 0) {
+        return sensorDataMap;
+    }
+
+    // Fetch latest sensor reading for each device
+    const { data: readings, error } = await supabase
+        .from('sensor_readings')
+        .select('device_id, temperature, smoke_level, gas_level')
+        .in('device_id', deviceIds)
+        .order('created_at', { ascending: false });
+
+    if (error) {
+        console.error('Error fetching sensor readings:', error);
+        return sensorDataMap;
+    }
+
+    // Group by device_id and take the latest reading for each device
+    const deviceLatestReading = new Map<number, SensorReadingRow>();
+    readings?.forEach((reading: any) => {
+        const deviceId = reading.device_id;
+        if (!deviceLatestReading.has(deviceId)) {
+            deviceLatestReading.set(deviceId, reading);
+        }
+    });
+
+    // Convert to SensorData format
+    deviceLatestReading.forEach((reading, deviceId) => {
+        sensorDataMap.set(deviceId, {
+            temperature: Number(reading.temperature ?? 0),
+            smoke: Number(reading.smoke_level ?? 0),
+            gas: Number(reading.gas_level ?? 0),
+        });
+    });
+
+    return sensorDataMap;
+};
+
+// Supabase-backed subscription for incidents used by Alerts page
+export const subscribeToIncidents = (callback: (incidents: Incident[]) => void) => {
+    let currentIncidents: Incident[] = [];
+    let pollingInterval: NodeJS.Timeout | null = null;
+    let isPolling = false;
+
+    const loadInitial = async () => {
+        if (isPolling) return; // Prevent concurrent fetches
+        isPolling = true;
+
+        try {
+            // Fetch fire_alerts only first (no joins) so Alerts page shows data even if RLS blocks locations/devices
+            const { data: alertRows, error } = await supabase
+                .from('fire_alerts')
+                .select('id, device_id, location_id, alert_level, status, triggered_at')
+                .order('triggered_at', { ascending: false });
+
+            if (error) {
+                console.error('Error loading incidents from Supabase:', error);
+                console.error('Error details:', {
+                    message: error.message,
+                    details: error.details,
+                    hint: error.hint,
+                    code: error.code
+                });
+                callback([]);
+                return;
+            }
+
+            if (!alertRows?.length) {
+                callback([]);
+                return;
+            }
+
+            const rows = alertRows as FireAlertRow[];
+            const locationIds = rows
+                .map(r => r.location_id)
+                .filter((id): id is number => id != null);
+            const deviceIds = rows
+                .map(r => r.device_id)
+                .filter((id): id is number => id != null);
+
+            const [locationMap, sensorDataMap] = await Promise.all([
+                fetchLocationsByIds(locationIds),
+                fetchLatestSensorReadings(deviceIds),
+            ]);
+
+            currentIncidents = rows.map(row =>
+                mapRowToIncident(row, { locationMap, sensorDataMap })
+            );
+            callback(currentIncidents);
+        } finally {
+            isPolling = false;
+        }
+    };
+
+    // Initial fetch immediately
+    void loadInitial();
+
+    // Aggressive polling fallback: Check every 1 second for maximum responsiveness
+    pollingInterval = setInterval(() => {
+        void loadInitial();
+    }, 1000);
+
+    // Realtime updates from Supabase (fire_alerts table) - primary method
+    const channel = supabase
+        .channel('fire-alerts-changes')
+        .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'fire_alerts' },
+            async (payload) => {
+                // Reload all incidents when there's a change to ensure we have latest data
+                await loadInitial();
+            }
+        )
+        .subscribe();
+
+    // Cleanup
+    return () => {
+        if (pollingInterval) {
+            clearInterval(pollingInterval);
+        }
+        supabase.removeChannel(channel);
+    };
+};
+
+// Mark an incident as responding in the fire_alerts table
+export const respondToIncident = async (incidentId: string) => {
+    const { error } = await supabase
+        .from('fire_alerts')
+        .update({
+            status: IncidentStatus.RESPONDING,
+        })
+        .eq('id', incidentId);
+
+    if (error) {
+        console.error('Error updating incident to responding:', error);
+        throw error;
+    }
+};
+
+// Mark an incident as resolved in the fire_alerts table
+export const resolveIncident = async (incidentId: string) => {
+    const { error } = await supabase
+        .from('fire_alerts')
+        .update({
+            status: IncidentStatus.RESOLVED,
+        })
+        .eq('id', incidentId);
+
+    if (error) {
+        console.error('Error resolving incident:', error);
+        throw error;
+    }
+};
