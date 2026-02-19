@@ -1,7 +1,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { Smartphone, PlusCircle, Loader2 } from 'lucide-react';
-import { supabase } from '../../services/supabase';
+import { registerDeviceWithLocation, supabase } from '../../services/supabase';
 import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -216,62 +216,20 @@ const Devices: React.FC = () => {
 
         setIsSubmitting(true);
         try {
-            // 1) Create a location row with full details, including latitude/longitude
-            const {
-                data: newLocation,
-                error: locationInsertError,
-            } = await supabase
-                .from('locations')
-                .insert({
-                    location_name: form.location_name.trim(),
-                    address: form.address.trim(),
-                    latitude: Number(form.latitude),
-                    longitude: Number(form.longitude),
-                })
-                .select('id, location_name, address')
-                .single();
-
-            if (locationInsertError || !newLocation) {
-                console.error('Error creating location:', locationInsertError);
-                setError(locationInsertError?.message ?? 'Failed to create location for this device.');
-                return;
-            }
-
-            // 2) Register the device, linking it to the newly created location
-            const payload: Partial<DeviceRow> = {
+            const { device, location } = await registerDeviceWithLocation({
                 device_uid: effectiveDeviceUid,
                 device_type: form.device_type,
                 status: form.status,
-                location_id: newLocation.id,
-            };
-
-            const { data, error: insertError } = await supabase
-                .from('devices')
-                .insert(payload)
-                .select('id, device_uid, device_type, status, last_seen, location_id')
-                .single();
-
-            if (insertError) {
-                console.error('Error registering device:', insertError);
-                // Common case: unique violation on device_uid
-                if ((insertError as any).code === '23505') {
-                    setError('A device with this UID already exists.');
-                } else {
-                    setError(insertError.message ?? 'Failed to register device.');
-                }
-                return;
-            }
-
-            const location: LocationRow = {
-                id: newLocation.id,
-                location_name: newLocation.location_name,
-                address: newLocation.address,
-            };
+                location_name: form.location_name,
+                address: form.address,
+                latitude: Number(form.latitude),
+                longitude: Number(form.longitude),
+            });
 
             setDevices(prev => [
                 ...prev,
                 {
-                    ...(data as DeviceRow),
+                    ...(device as any as DeviceRow),
                     location,
                 },
             ]);

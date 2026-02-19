@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Flame, ShieldAlert, Clock, TrendingUp } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import StatCard from '../../components/StatCard';
 import AnalyticsChart from '../../components/AnalyticsChart';
 import { subscribeToIncidents } from '../../services/supabase';
@@ -8,6 +9,7 @@ import { Incident, IncidentStatus } from '../../types';
 
 const Dashboard: React.FC = () => {
     const [incidents, setIncidents] = useState<Incident[]>([]);
+    const navigate = useNavigate();
     
     useEffect(() => {
         const unsubscribe = subscribeToIncidents(setIncidents);
@@ -30,12 +32,14 @@ const Dashboard: React.FC = () => {
                     value={totalIncidentsToday.toString()} 
                     icon={<Flame className="h-8 w-8 text-[#FB8C00]" />}
                     color="orange"
+                    onClick={() => navigate('/dashboard/reports')}
                 />
                 <StatCard 
                     title="Active Fire Alerts" 
                     value={activeFireAlerts.toString()} 
                     icon={<ShieldAlert className="h-8 w-8 text-[#E53935]" />}
                     color="red"
+                    onClick={() => navigate('/dashboard/alerts')}
                 />
                 <StatCard 
                     title="Average Response Time" 

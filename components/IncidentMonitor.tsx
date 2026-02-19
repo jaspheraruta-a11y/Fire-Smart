@@ -77,11 +77,20 @@ const IncidentMonitor: React.FC = () => {
                             : `There are now ${currentActiveCount} active fire incidents.`;
 
                     try {
-                        new Notification(title, {
+                        const notification = new Notification(title, {
                             body,
                             tag: 'fire-smart-active-incident',
                             renotify: true,
                         });
+                        notification.onclick = () => {
+                            try {
+                                window.focus();
+                                // HashRouter friendly navigation
+                                window.location.hash = '#/dashboard/alerts';
+                            } catch (err) {
+                                console.error('Failed to handle notification click:', err);
+                            }
+                        };
                     } catch (err) {
                         console.error('Failed to show notification:', err);
                     }

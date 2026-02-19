@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { MapContainer, TileLayer, Marker, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Incident, IncidentStatus } from '../types';
@@ -102,8 +102,12 @@ function MapFocusController({
     incidents: Incident[];
 }) {
     const map = useMap();
+    const lastFocusedIdRef = useRef<string | null>(null);
     useEffect(() => {
         if (!focusIncidentId || !incidents.length) return;
+        // Only focus once per focusIncidentId, otherwise realtime updates will keep snapping
+        // the map back and prevent free panning.
+        if (lastFocusedIdRef.current === focusIncidentId) return;
         const incident = incidents.find((i) => i.id === focusIncidentId);
         if (incident?.location?.lat != null && incident?.location?.lng != null) {
             map.flyTo(
@@ -111,6 +115,7 @@ function MapFocusController({
                 17,
                 { duration: 1.2 }
             );
+            lastFocusedIdRef.current = focusIncidentId;
         }
     }, [focusIncidentId, incidents, map]);
     return null;
@@ -121,9 +126,15 @@ const LiveMapComponent: React.FC<LiveMapComponentProps> = ({
     focusIncidentId = null,
 }) => {
     const [isMounted, setIsMounted] = useState(false);
+    const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
     useEffect(() => {
         setIsMounted(true);
     }, []);
+
+    const mapIncidents = useMemo(() => {
+        // When fire is resolved, remove icon on the map.
+        return incidents.filter((incident) => normalizeStatus(incident?.status) !== IncidentStatus.RESOLVED);
+    }, [incidents]);
 
     if (!isMounted) {
         return (
@@ -134,49 +145,109 @@ const LiveMapComponent: React.FC<LiveMapComponentProps> = ({
     }
 
     return (
-        <MapContainer
-            center={VALENCIA_CITY_CENTER}
-            zoom={VALENCIA_DEFAULT_ZOOM}
-            style={{ height: '100%', width: '100%', backgroundColor: '#ffffff', zIndex: 0 }}
-        >
+        <div className="relative h-full w-full">
+            <MapContainer
+                center={VALENCIA_CITY_CENTER}
+                zoom={VALENCIA_DEFAULT_ZOOM}
+                style={{ height: '100%', width: '100%', backgroundColor: '#ffffff', zIndex: 0 }}
+            >
             <TileLayer
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                 url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
             />
             <MapResizer />
-            <MapFocusController focusIncidentId={focusIncidentId} incidents={incidents} />
-            {incidents
+            <MapFocusController focusIncidentId={focusIncidentId} incidents={mapIncidents} />
+            {mapIncidents
                 .filter((incident) => incident?.location?.lat != null && incident?.location?.lng != null)
                 .map((incident) => {
                     const lat = incident.location.lat;
                     const lng = incident.location.lng;
-                    const sensor = incident.sensorData;
-                    const temp = sensor?.temperature ?? 0;
-                    const smoke = sensor?.smoke ?? 0;
-                    const gas = sensor?.gas ?? 0;
                     return (
-                        <Marker key={incident.id} position={[lat, lng]} icon={createMarkerIcon(incident.status)}>
-                            <Popup>
-                                <div className="bg-white text-gray-900 p-2 rounded-md border border-gray-200 shadow-md w-64">
-                                    <h3 className="font-bold text-lg mb-2">Incident: {incident.id}</h3>
-                                    <p><strong>Status:</strong> <span className="capitalize">{String(incident.status ?? 'active')}</span></p>
-                                    <p><strong>Address:</strong> {incident.address ?? 'Unknown'}</p>
-                                    <p><strong>Detected:</strong> {incident.timestamp ? new Date(incident.timestamp).toLocaleString() : '—'}</p>
-                                    <p><strong>Unit:</strong> {incident.assignedUnit || 'N/A'}</p>
-                                    <div className="mt-2 pt-2 border-t border-gray-200">
-                                        <p className="font-semibold">Sensor Data:</p>
-                                        <ul className="list-disc list-inside text-sm">
-                                            <li>Temp: {Number(temp).toFixed(1)}°C</li>
-                                            <li>Smoke: {smoke} PPM</li>
-                                            <li>Gas: {gas} PPM</li>
-                                        </ul>
-                                    </div>
-                                </div>
-                            </Popup>
-                        </Marker>
+                        <Marker
+                            key={incident.id}
+                            position={[lat, lng]}
+                            icon={createMarkerIcon(incident.status)}
+                            eventHandlers={{
+                                click: () => setSelectedIncident(incident),
+                            }}
+                        />
                     );
                 })}
-        </MapContainer>
+            </MapContainer>
+
+            {selectedIncident && (
+                <div
+                    className="absolute inset-0 z-[1000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+                    role="dialog"
+                    aria-modal="true"
+                    onClick={() => setSelectedIncident(null)}
+                >
+                    <div
+                        className="w-full max-w-lg rounded-xl border border-white/10 bg-[#1A1A1A]/90 text-white shadow-2xl"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-start justify-between gap-4 border-b border-white/10 p-4">
+                            <div>
+                                <h3 className="text-lg font-bold">Incident Details</h3>
+                                <p className="text-sm text-gray-300">{selectedIncident.id}</p>
+                            </div>
+                            <button
+                                type="button"
+                                className="rounded-lg bg-white/10 px-3 py-2 text-sm hover:bg-white/20"
+                                onClick={() => setSelectedIncident(null)}
+                            >
+                                Close
+                            </button>
+                        </div>
+
+                        <div className="space-y-3 p-4 text-sm">
+                            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                                <div className="rounded-lg bg-black/20 p-3">
+                                    <div className="text-gray-300">Status</div>
+                                    <div className="font-semibold capitalize">{String(selectedIncident.status ?? 'active')}</div>
+                                </div>
+                                <div className="rounded-lg bg-black/20 p-3">
+                                    <div className="text-gray-300">Detected</div>
+                                    <div className="font-semibold">
+                                        {selectedIncident.timestamp ? new Date(selectedIncident.timestamp).toLocaleString() : '—'}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="rounded-lg bg-black/20 p-3">
+                                <div className="text-gray-300">Address</div>
+                                <div className="font-semibold">{selectedIncident.address ?? 'Unknown'}</div>
+                            </div>
+
+                            <div className="rounded-lg bg-black/20 p-3">
+                                <div className="text-gray-300">Assigned Unit</div>
+                                <div className="font-semibold">{selectedIncident.assignedUnit || 'N/A'}</div>
+                            </div>
+
+                            <div className="rounded-lg bg-black/20 p-3">
+                                <div className="text-gray-300 mb-2">Sensor Data</div>
+                                <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+                                    <div className="rounded-md bg-white/5 p-2">
+                                        <div className="text-gray-300">Temp</div>
+                                        <div className="font-semibold">
+                                            {Number(selectedIncident.sensorData?.temperature ?? 0).toFixed(1)}°C
+                                        </div>
+                                    </div>
+                                    <div className="rounded-md bg-white/5 p-2">
+                                        <div className="text-gray-300">Smoke</div>
+                                        <div className="font-semibold">{selectedIncident.sensorData?.smoke ?? 0} PPM</div>
+                                    </div>
+                                    <div className="rounded-md bg-white/5 p-2">
+                                        <div className="text-gray-300">Gas</div>
+                                        <div className="font-semibold">{selectedIncident.sensorData?.gas ?? 0} PPM</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
     );
 };
 

@@ -21,6 +21,113 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey);
 
+export type RegisterDeviceInput = {
+    device_uid: string;
+    device_type?: string | null;
+    status?: string | null;
+    location_name: string;
+    address: string;
+    latitude: number;
+    longitude: number;
+};
+
+type DeviceInsertRow = {
+    id: number;
+    device_uid: string;
+    device_type: string | null;
+    status: string | null;
+    last_seen: string | null;
+    location_id: number | null;
+};
+
+type LocationInsertRow = {
+    id: number;
+    location_name: string;
+    address: string;
+};
+
+const isRlsInsertBlocked = (error: any): boolean => {
+    const msg = (error?.message ?? '').toString().toLowerCase();
+    const code = (error?.code ?? '').toString();
+    return (
+        code === '42501' ||
+        msg.includes('row-level security') ||
+        msg.includes('violates row level security') ||
+        msg.includes('new row violates row-level security')
+    );
+};
+
+export const registerDeviceWithLocation = async (
+    input: RegisterDeviceInput
+): Promise<{ device: DeviceInsertRow; location: LocationInsertRow }> => {
+    const {
+        device_uid,
+        device_type = 'fire_sensor',
+        status = 'active',
+        location_name,
+        address,
+        latitude,
+        longitude,
+    } = input;
+
+    // 1) Create location
+    const { data: newLocation, error: locationInsertError } = await supabase
+        .from('locations')
+        .insert({
+            location_name: location_name.trim(),
+            address: address.trim(),
+            latitude,
+            longitude,
+        })
+        .select('id, location_name, address')
+        .single();
+
+    if (locationInsertError || !newLocation) {
+        if (isRlsInsertBlocked(locationInsertError)) {
+            throw new Error(
+                'Database blocked creating locations (Row Level Security). Apply the INSERT policy in `supabase_rls_policies.sql` (Allow insert locations), then try again.'
+            );
+        }
+        throw new Error(locationInsertError?.message ?? 'Failed to create location.');
+    }
+
+    // 2) Create device linked to location
+    const { data: newDevice, error: deviceInsertError } = await supabase
+        .from('devices')
+        .insert({
+            device_uid: device_uid.trim(),
+            device_type,
+            status,
+            location_id: newLocation.id,
+        })
+        .select('id, device_uid, device_type, status, last_seen, location_id')
+        .single();
+
+    if (deviceInsertError || !newDevice) {
+        // Best-effort cleanup to avoid orphaned locations. Ignore cleanup errors (may be blocked by RLS).
+        try {
+            await supabase.from('locations').delete().eq('id', newLocation.id);
+        } catch {
+            // ignore
+        }
+
+        if ((deviceInsertError as any)?.code === '23505') {
+            throw new Error('A device with this UID already exists.');
+        }
+        if (isRlsInsertBlocked(deviceInsertError)) {
+            throw new Error(
+                'Database blocked creating devices (Row Level Security). Apply the INSERT policy in `supabase_rls_policies.sql` (Allow insert devices), then try again.'
+            );
+        }
+        throw new Error(deviceInsertError?.message ?? 'Failed to register device.');
+    }
+
+    return {
+        device: newDevice as DeviceInsertRow,
+        location: newLocation as LocationInsertRow,
+    };
+};
+
 // Test database connection
 export const testConnection = async (): Promise<boolean> => {
     try {
