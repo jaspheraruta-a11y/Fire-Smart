@@ -70,26 +70,25 @@ const createMarkerIcon = (status: IncidentStatus | string | undefined) => {
 function MapResizer() {
     const map = useMap();
     useEffect(() => {
-        const run = () => map.invalidateSize();
-        requestAnimationFrame(run);
-        const t1 = setTimeout(run, 50);
-        const t2 = setTimeout(run, 200);
-        const t3 = setTimeout(run, 500);
-        const t4 = setTimeout(run, 1000);
-        const t5 = isElectron ? setTimeout(run, 2000) : null;
-
-        const handleResize = () => map.invalidateSize();
+        // Invalidate map size after mount to fix black screen issue when navigating
+        const timer1 = setTimeout(() => {
+            map.invalidateSize();
+        }, 100);
+        
+        const timer2 = setTimeout(() => {
+            map.invalidateSize();
+        }, 500);
+        
+        // Also invalidate on window resize
+        const handleResize = () => {
+            map.invalidateSize();
+        };
         window.addEventListener('resize', handleResize);
-
-        const container = map.getContainer();
-        const ro = new ResizeObserver(() => map.invalidateSize());
-        if (container) ro.observe(container);
-
+        
         return () => {
-            [t1, t2, t3, t4].forEach(clearTimeout);
-            if (t5) clearTimeout(t5);
+            clearTimeout(timer1);
+            clearTimeout(timer2);
             window.removeEventListener('resize', handleResize);
-            if (container) ro.unobserve(container);
         };
     }, [map]);
     return null;
@@ -122,47 +121,15 @@ function MapFocusController({
     return null;
 }
 
-/** Detect Electron/Nativefier so we can apply workarounds for map sizing. */
-const isElectron = typeof navigator !== 'undefined' && /Electron|nativefier/i.test(navigator.userAgent);
-
 const LiveMapComponent: React.FC<LiveMapComponentProps> = ({
     incidents,
     focusIncidentId = null,
 }) => {
     const [isMounted, setIsMounted] = useState(false);
-    const [containerReady, setContainerReady] = useState(false);
-    const containerRef = useRef<HTMLDivElement>(null);
     const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
-
     useEffect(() => {
         setIsMounted(true);
     }, []);
-
-    // Only render MapContainer when the wrapper has non-zero dimensions (fixes black screen in Electron)
-    useEffect(() => {
-        if (!isMounted || !containerRef.current) return;
-        const el = containerRef.current;
-        const check = () => {
-            if (el.offsetHeight > 0 && el.offsetWidth > 0) {
-                setContainerReady(true);
-                return true;
-            }
-            return false;
-        };
-        if (check()) return;
-        const ro = new ResizeObserver(() => {
-            if (check()) ro.disconnect();
-        });
-        ro.observe(el);
-        const t = setTimeout(() => {
-            check();
-            ro.disconnect();
-        }, isElectron ? 800 : 300);
-        return () => {
-            ro.disconnect();
-            clearTimeout(t);
-        };
-    }, [isMounted]);
 
     const mapIncidents = useMemo(() => {
         // When fire is resolved, remove icon on the map.
@@ -178,16 +145,11 @@ const LiveMapComponent: React.FC<LiveMapComponentProps> = ({
     }
 
     return (
-        <div ref={containerRef} className="relative h-full w-full min-h-[480px]" style={{ minHeight: '480px' }}>
-            {!containerReady ? (
-                <div className="absolute inset-0 flex items-center justify-center bg-[#e4e4e4] rounded-lg">
-                    <div className="animate-pulse text-gray-600">Loading map...</div>
-                </div>
-            ) : (
+        <div className="relative h-full w-full">
             <MapContainer
                 center={VALENCIA_CITY_CENTER}
                 zoom={VALENCIA_DEFAULT_ZOOM}
-                style={{ height: '100%', minHeight: '480px', width: '100%', backgroundColor: '#e4e4e4', zIndex: 0 }}
+                style={{ height: '100%', width: '100%', backgroundColor: '#ffffff', zIndex: 0 }}
             >
             <TileLayer
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -212,7 +174,6 @@ const LiveMapComponent: React.FC<LiveMapComponentProps> = ({
                     );
                 })}
             </MapContainer>
-            )}
 
             {selectedIncident && (
                 <div

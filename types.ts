@@ -1,8 +1,7 @@
 
 export enum UserRole {
-    ADMIN = 'admin',
-    BFP = 'bfp',
-    RESIDENT = 'resident',
+    BFP_ADMIN = 'bfp_admin',
+    MONITORING_OFFICER = 'monitoring_officer',
 }
 
 export interface UserProfile {

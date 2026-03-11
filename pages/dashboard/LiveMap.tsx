@@ -28,7 +28,7 @@ const LiveMap: React.FC = () => {
                 <div className="flex items-center space-x-2"><div className="w-4 h-4 rounded-full bg-yellow-500"></div><span>Responding ({respondingIncidents.length})</span></div>
                 <div className="flex items-center space-x-2"><div className="w-4 h-4 rounded-full bg-green-500"></div><span>Resolved ({resolvedIncidents.length})</span></div>
             </div>
-            <div className="flex-grow rounded-lg overflow-hidden border border-gray-700 bg-white min-h-[500px]" style={{ minHeight: '500px', height: '60vh' }}>
+            <div className="flex-grow min-h-[60vh] rounded-lg overflow-hidden border border-gray-700 bg-white" style={{ minHeight: '500px', height: '100%' }}>
                 <ErrorBoundary>
                     <LiveMapComponent incidents={incidents} focusIncidentId={focusIncidentId} />
                 </ErrorBoundary>
