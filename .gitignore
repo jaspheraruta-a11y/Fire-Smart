@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 *.local
+FireSmart-win32-x64/
 
 # Editor directories and files
 .vscode/*
